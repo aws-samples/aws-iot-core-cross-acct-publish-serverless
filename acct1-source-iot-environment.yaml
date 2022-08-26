@@ -1,0 +1,61 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09' 
+Transform: AWS::Serverless-2016-10-31 
+Description: Source IoT Core Stack
+
+Parameters: 
+  RuleName: 
+    Type: String
+    Default: Rule1RePublish
+    Description: Source AWS Account IoT Rule1 for IoT republish
+  DestinationAccountId:
+    Type: String
+    Default: 'addAccountId'
+ 
+  
+Resources:
+  CFTCrossAcctCaSqsRole: 
+    Type: AWS::IAM::Role 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Statement: 
+        - Effect: Allow 
+          Principal: 
+            Service: 
+            - iot.amazonaws.com 
+          Action: 
+          - sts:AssumeRole 
+      Policies: 
+        - PolicyName: !Sub '${RuleName}-Policy' 
+          PolicyDocument: 
+            Statement: 
+            - Effect: Allow 
+              Action: 
+              - 'sqs:SendMessage'
+              Resource: !Sub arn:aws:sqs:${AWS::Region}:${DestinationAccountId}:DestinationIoTQ
+              
+  CaIOTRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName:
+        Ref: RuleName
+      TopicRulePayload:
+        RuleDisabled: 'false'
+        Sql: Select * , topic() as topic FROM 'GROUND/v1/#'
+        Actions:
+        - Sqs:
+            QueueUrl: !Sub https://sqs.${AWS::Region}.amazonaws.com/${DestinationAccountId}/DestinationIoTQ
+            RoleArn: !GetAtt CFTCrossAcctCaSqsRole.Arn
+            UseBase64: false
+
+ 
+           
+              
+
+ 
+
+              
+            
+         

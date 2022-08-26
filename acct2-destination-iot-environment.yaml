@@ -1,0 +1,123 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09' 
+Transform: AWS::Serverless-2016-10-31 
+Description: Destination IoT Core Stack
+
+Parameters: 
+  
+  SourceAccountId:
+    Type: String
+    Default: 'addYourAcctId'
+  DestinationIotEndPointUrl:
+    Type: String 
+    Default: https://xyzabcefghij-ats.iot.region.amazonaws.com
+ 
+Resources:
+  IoTMessageQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Id: DestinationRule1QPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Default Policy
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+          Action:
+            - sqs:*
+          Resource: !GetAtt IoTMessageQ.Arn
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${SourceAccountId}:root
+          Action:
+            - sqs:SendMessage
+          Resource: !GetAtt IoTMessageQ.Arn
+      Queues:
+        - !Ref IoTMessageQ
+
+  IoTMessageQ: 
+    Type: AWS::SQS::Queue
+    Properties: 
+      QueueName: "DestinationIoTQ"
+
+  DestinationIoTLambdaRole: 
+    Type: AWS::IAM::Role 
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Statement: 
+        - Effect: Allow 
+          Principal: 
+            Service: 
+            - lambda.amazonaws.com 
+          Action: 
+          - sts:AssumeRole
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies: 
+        - PolicyName: 'DashCabinetRule1Lambda' 
+          PolicyDocument:
+             Id: DashCabinetRule1LambdaPolicy
+             Version: '2012-10-17' 
+             Statement: 
+              - Effect: Allow 
+                Action: 
+                - sqs:*
+                Resource: !GetAtt IoTMessageQ.Arn
+              - Effect: Allow 
+                Action: 
+                - iot:*
+                Resource: [ !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/GROUND/v1/*' ,  !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/fbos/*' ]
+              
+            
+
+  publishToDestinationIoTTopicLambda:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - DestinationIoTLambdaRole
+    Properties:
+      Runtime: python3.9
+      Environment:
+        Variables:
+          iotEndPointUrl: !Ref DestinationIotEndPointUrl
+      Role: !GetAtt DestinationIoTLambdaRole.Arn  
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          from __future__ import print_function
+          import json
+          import boto3
+          import os
+
+          iotUrl = os.environ.get("iotEndPointUrl")
+          region = os.environ["AWS_REGION"]
+    
+          def lambda_handler(event, context):
+
+              print("Received Event from Source IoT: " + json.dumps(event, indent=2))
+              message = str(event["Records"][0]["body"])
+              parsed = json.loads(message)
+              topicName = parsed["topic"]
+              client = boto3.client("iot-data", region_name=region, endpoint_url=iotUrl)
+            
+              response = client.publish(
+                  topic = topicName,
+                  qos=0,
+                  retain=True,
+                  payload=message
+              )
+              
+              return message
+      Description: Lambda to publish message to IoT Topic.
+      TracingConfig:
+        Mode: Active
+
+  LambdaFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt IoTMessageQ.Arn
+      FunctionName: !GetAtt publishToDestinationIoTTopicLambda.Arn 
